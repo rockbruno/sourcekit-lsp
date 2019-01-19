@@ -64,6 +64,7 @@ public final class SwiftLanguageServer: LanguageServer {
     _register(SwiftLanguageServer.foldingRange)
     _register(SwiftLanguageServer.symbolInfo)
     _register(SwiftLanguageServer.documentSymbol)
+    _register(SwiftLanguageServer.codeAction)
   }
 
   func getDiagnostic(_ diag: SKResponseDictionary, for snapshot: DocumentSnapshot) -> Diagnostic? {
@@ -193,7 +194,9 @@ extension SwiftLanguageServer {
       referencesProvider: nil,
       documentHighlightProvider: true,
       foldingRangeProvider: true,
-      documentSymbolProvider: true
+      documentSymbolProvider: true,
+      codeActionProvider: CodeActionOptions(
+        codeActionKinds: [])
       )))
   }
 
@@ -734,6 +737,37 @@ extension SwiftLanguageServer {
                            kind: kind)
     }
     ranges.append(range)
+  }
+
+  func codeAction(_ req: Request<CodeActionRequest>) {
+    let providersAndKinds: [(provider: CodeActionProvider, kind: CodeActionKind)] = [
+      //TODO: Implement the providers.
+      //(retrieveRefactorCodeActions, .refactor),
+      //(retrieveQuickFixCodeActions, .quickFix)
+    ]
+    let wantedActionKinds = req.params.context.only
+    let providers = providersAndKinds.filter { wantedActionKinds?.contains($0.1) != false }
+    retrieveCodeActions(req, providers: providers.map { $0.provider }) { codeActions in
+      req.reply(codeActions)
+    }
+  }
+
+  func retrieveCodeActions(_ req: Request<CodeActionRequest>, providers: [CodeActionProvider], completion: @escaping CodeActionProviderCompletion) {
+    guard providers.isEmpty == false else {
+      completion([])
+      return
+    }
+    var providersLeftToProcess = Set<Int>(0..<providers.count)
+    var codeActions = [CodeAction]()
+    for i in 0..<providers.count {
+      providers[i](req.params) { actions in
+        codeActions += actions
+        providersLeftToProcess.remove(i)
+        if providersLeftToProcess.isEmpty {
+          completion(codeActions)
+        }
+      }
+    }
   }
 }
 

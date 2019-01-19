@@ -45,6 +45,9 @@ public struct ServerCapabilities: Codable, Hashable {
   /// Whether the server provides "textDocument/documentSymbol"
   public var documentSymbolProvider: Bool?
 
+  /// Whether the server provides "textDocument/codeAction".
+  public var codeActionProvider: CodeActionOptions?
+
   // TODO: fill-in the rest.
 
   public init(
@@ -59,6 +62,8 @@ public struct ServerCapabilities: Codable, Hashable {
     documentOnTypeFormattingProvider: DocumentOnTypeFormattingOptions? = nil,
     foldingRangeProvider: Bool? = nil,
     documentSymbolProvider: Bool? = nil
+    foldingRangeProvider: Bool? = nil,
+    codeActionProvider: CodeActionOptions? = nil
     )
   {
     self.textDocumentSync = textDocumentSync
@@ -72,6 +77,7 @@ public struct ServerCapabilities: Codable, Hashable {
     self.documentOnTypeFormattingProvider = documentOnTypeFormattingProvider
     self.foldingRangeProvider = foldingRangeProvider
     self.documentSymbolProvider = documentSymbolProvider
+    self.codeActionProvider = codeActionProvider
   }
 
   public init(from decoder: Decoder) throws {
@@ -81,6 +87,7 @@ public struct ServerCapabilities: Codable, Hashable {
     self.definitionProvider = try container.decodeIfPresent(Bool.self, forKey: .definitionProvider)
     self.foldingRangeProvider = try container.decodeIfPresent(Bool.self, forKey: .foldingRangeProvider)
     self.documentSymbolProvider = try container.decodeIfPresent(Bool.self, forKey: .documentSymbolProvider)
+    self.codeActionProvider = try container.decodeIfPresent(CodeActionOptions.self, forKey: .codeActionProvider)
 
     if let textDocumentSync = try? container.decode(TextDocumentSyncOptions.self, forKey: .textDocumentSync) {
       self.textDocumentSync = textDocumentSync
@@ -169,5 +176,15 @@ public struct DocumentOnTypeFormattingOptions: Codable, Hashable {
   public init(triggerCharacters: [String]) {
     self.firstTriggerCharacter = triggerCharacters.first!
     self.moreTriggerCharacter = Array(triggerCharacters.dropFirst())
+  }
+}
+
+public struct CodeActionOptions: Codable, Hashable {
+
+  /// CodeActionKinds that this server may return.
+  public var codeActionKinds: [CodeActionKind]?
+
+  public init(codeActionKinds: [CodeActionKind]?) {
+    self.codeActionKinds = codeActionKinds
   }
 }

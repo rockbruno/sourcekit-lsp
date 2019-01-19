@@ -31,6 +31,7 @@ public let builtinRequests: [_RequestType.Type] = [
   DocumentOnTypeFormatting.self,
   FoldingRangeRequest.self,
   DocumentSymbolRequest.self,
+  CodeActionRequest.self,
 
   // MARK: LSP Extension Requests
 
@@ -55,6 +56,13 @@ public let builtinNotifications: [NotificationType.Type] = [
   DidSaveTextDocument.self,
   WillSaveTextDocument.self,
   PublishDiagnostics.self,
+]
+
+/// The set of known commands.
+///
+/// All commands provided by the server should be listed here.
+public let builtinCommands: [CommandDataType.Type] = [
+  SemanticRefactorCommandDataType.self
 ]
 
 // MARK: Miscellaneous Message Types
