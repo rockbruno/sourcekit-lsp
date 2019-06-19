@@ -21,18 +21,46 @@ public let builtinSwiftCommands: [String] = [
   SemanticRefactorCommand.self
 ].map { $0.identifier }
 
-// TODO: Docs
+/// A `Command` that should be executed by Swift's language server.
+public protocol SwiftCommand: Codable, Hashable {
+  var title: String { get set }
+  static var swiftCommandIdentifier: String { get }
+}
+
+extension SwiftCommand {
+  public static var identifier: String {
+    return Command.swiftCommandIdentifierPrefix + Self.swiftCommandIdentifier
+  }
+
+  /// Converts this `SwiftCommand` to a generic LSP `Command` object.
+  public func asCommand() throws -> Command {
+    let data = try JSONEncoder().encode(self)
+    let argument = try JSONDecoder().decode(CommandArgumentType.self, from: data)
+    return Command(title: title, command: Self.identifier, arguments: [argument])
+  }
+}
+
 extension Command {
-  public static var swiftCommandIdentifierPrefix: String {
+  /// The prefix applied to the identifier of Swift-specific LSP `Command`s.
+  fileprivate static var swiftCommandIdentifierPrefix: String {
     return "swift.lsp."
   }
 
+  /// Returns true if the provided command identifier should be handled by Swift's language server.
+  ///
+  /// - Parameters:
+  ///   - command: The command identifier.
   public static func isCommandIdentifierFromSwiftLSP(_ command: String) -> Bool {
     return command.hasPrefix(Command.swiftCommandIdentifierPrefix)
   }
 }
 
 extension ExecuteCommandRequest {
+  /// Attempts to convert the underlying `Command` metadata from this request
+  /// to a specific Swift language server `SwiftCommand`.
+  ///
+  /// - Parameters:
+  ///   - type: The `SwiftCommand` metatype to convert to.
   public func swiftCommand<T: SwiftCommand>(ofType type: T.Type) -> T? {
     guard type.identifier == command else {
       return nil
@@ -50,27 +78,8 @@ extension ExecuteCommandRequest {
   }
 }
 
-// TODO: Docs
-public protocol SwiftCommand: Codable, Hashable {
-  var title: String { get set }
-  static var identifierSuffix: String { get }
-}
-
-extension SwiftCommand {
-  public static var identifier: String {
-    return Command.swiftCommandIdentifierPrefix + Self.identifierSuffix
-  }
-
-  public func asCommand() throws -> Command {
-    let data = try JSONEncoder().encode(self)
-    let argument = try JSONDecoder().decode(CommandArgumentType.self, from: data)
-    return Command(title: title, command: Self.identifier, arguments: [argument])
-  }
-}
-
 public struct SemanticRefactorCommand: SwiftCommand {
-
-  public static var identifierSuffix: String {
+  public static var swiftCommandIdentifier: String {
     return "semantic.refactor.command"
   }
 
