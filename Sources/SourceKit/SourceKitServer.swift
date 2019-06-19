@@ -78,6 +78,7 @@ public final class SourceKitServer: LanguageServer {
     registerWorkspaceRequest(SourceKitServer.symbolInfo)
     registerWorkspaceRequest(SourceKitServer.documentSymbol)
     registerWorkspaceRequest(SourceKitServer.codeAction)
+    registerWorkspaceRequest(SourceKitServer.executeCommand)
   }
 
   func registerWorkspaceRequest<R>(
@@ -267,8 +268,12 @@ extension SourceKitServer {
         codeActionOptions: CodeActionOptions(
           codeActionKinds: nil
         ),
-        supportsCodeActions: false // TODO: Turn it on after a provider is implemented.
-    ))))
+        supportsCodeActions: true
+      ),
+      executeCommandProvider: ExecuteCommandOptions(
+        commands: builtinSwiftCommands // FIXME: Clangd commands?
+      )
+    )))
   }
 
   func clientInitialized(_: Notification<InitializedNotification>) {
@@ -355,6 +360,29 @@ extension SourceKitServer {
 
   func codeAction(_ req: Request<CodeActionRequest>, workspace: Workspace) {
     toolchainTextDocumentRequest(req, workspace: workspace, fallback: nil)
+  }
+
+  func executeCommand(_ req: Request<ExecuteCommandRequest>, workspace: Workspace) {
+    // FIXME: This request has no URL associated to it, but we need to determine the server
+    // that it gets sent to. There should be a better way to do this.
+    let isSwiftCommand = Command.isCommandIdentifierFromSwiftLSP(req.params.command)
+    let connections = workspace.documentService.values.compactMap { $0 as? LocalConnection }
+    let service: Connection?
+    if isSwiftCommand {
+      service = connections.first { $0.handler is SwiftLanguageServer }
+    } else {
+      service = connections.first { $0.handler is ClangLanguageServerShim }
+    }
+    guard let serviceToExecute = service else {
+      req.reply(nil)
+      return
+    }
+    let id = serviceToExecute.send(req.params, queue: DispatchQueue.global()) { result in
+      req.reply(result)
+    }
+    req.cancellationToken.addCancellationHandler { [weak serviceToExecute] in
+      serviceToExecute?.send(CancelRequest(id: id))
+    }
   }
 
   func definition(_ req: Request<DefinitionRequest>, workspace: Workspace) {
