@@ -316,13 +316,17 @@ package actor BuildServerManager: QueueBasedMessageHandler {
   /// `nil` if the `BuildServerManager` does not have an underlying build server.
   package let configPath: URL?
 
+  /// The kind of underlying build server adapter that is being managed.
+  /// `nil` if the `BuildServerManager` does not have an underlying build server.
+  package var kind: BuildServerSpec.Kind?
+
   /// The files for which the delegate has requested change notifications, ie. the files for which the delegate wants to
   /// get `fileBuildSettingsChanged` and `filesDependenciesUpdated` callbacks.
   private var watchedFiles: [DocumentURI: (mainFile: DocumentURI, language: Language)] = [:]
 
   private var connectionToClient: BuildServerManagerConnectionToClient
 
-  /// The build serer adapter that is used to answer build server queries.
+  /// The build server adapter that is used to answer build server queries.
   private var buildServerAdapter: BuildServerAdapter?
 
   /// The build server adapter after initialization finishes. When sending messages to the BSP server, this should be
@@ -451,6 +455,7 @@ package actor BuildServerManager: QueueBasedMessageHandler {
     self.toolchainRegistry = toolchainRegistry
     self.options = options
     self.connectionToClient = connectionToClient
+    self.kind = buildServerSpec?.kind
     self.configPath = buildServerSpec?.configPath
     self.buildServerAdapter = await buildServerSpec?.createBuildServerAdapter(
       toolchainRegistry: toolchainRegistry,
