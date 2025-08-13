@@ -169,8 +169,11 @@ package final class Workspace: Sendable, BuildServerManagerDelegate {
         // processor count, so we can get parallelism during preparation.
         // (https://github.com/swiftlang/sourcekit-lsp/issues/1262)
         batchSize = 1
+        logger.error("BATCHSIZEEEEE1")
       default:
         batchSize = max(1, ProcessInfo.processInfo.activeProcessorCount / 2)
+        logger.error("BATCHSIZEEEEECERTOOOO \(batchSize, privacy: .public)")
+        logger.error("BATCHSIZEEEEECERTOOOODAT \(ProcessInfo.processInfo.activeProcessorCount, privacy: .public)")
       }
       self.semanticIndexManager = SemanticIndexManager(
         index: uncheckedIndex,
