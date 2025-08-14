@@ -175,12 +175,14 @@ package extension CustomBuildServer {
 
   func initializationResponseSupportingBackgroundIndexing(
     projectRoot: URL,
-    outputPathsProvider: Bool
+    outputPathsProvider: Bool,
+    indexTaskBatchSize: Int? = nil
   ) throws -> InitializeBuildResponse {
     return initializationResponse(
       initializeData: SourceKitInitializeBuildResponseData(
         indexDatabasePath: try projectRoot.appending(component: "index-db").filePath,
         indexStorePath: try projectRoot.appending(component: "index-store").filePath,
+        indexTaskBatchSize: indexTaskBatchSize,
         outputPathsProvider: outputPathsProvider,
         prepareProvider: true,
         sourceKitOptionsProvider: true

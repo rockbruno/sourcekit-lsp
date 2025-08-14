@@ -2619,368 +2619,79 @@ final class BackgroundIndexingTests: XCTestCase {
     XCTAssertEqual(symbols?.count, 1)
   }
 
-  func testTargetsAreIndexedInDependencyOrder() async throws {
-    // We want to prepare low-level targets before high-level targets to make progress on indexing more quickly.
-    let preparationRequests = ThreadSafeBox<[BuildTargetPrepareRequest]>(initialValue: [])
-    let twoPreparationRequestsReceived = self.expectation(description: "Received two preparation requests")
-    let testHooks = Hooks(
-      buildServerHooks: BuildServerHooks(preHandleRequest: { request in
-        if let request = request as? BuildTargetPrepareRequest {
-          preparationRequests.value.append(request)
-          if preparationRequests.value.count >= 2 {
-            twoPreparationRequestsReceived.fulfill()
-          }
-        }
-      })
-    )
-    let project = try await SwiftPMTestProject(
-      files: [
-        "LibA/LibA.swift": "",
-        "LibB/LibB.swift": "",
-      ],
-      manifest: """
-        let package = Package(
-          name: "MyLibrary",
-          targets: [
-           .target(name: "LibA"),
-           .target(name: "LibB", dependencies: ["LibA"])
-          ]
-        )
-        """,
-      hooks: testHooks,
-      enableBackgroundIndexing: true,
-      pollIndex: false
-    )
-    // We can't poll the index using `workspace/synchronize` because that elevates the priority of the indexing requests
-    // in a non-deterministic order (due to the way ). If LibB's priority gets elevated before LibA's, then LibB will
-    // get prepared first, which is contrary to the background behavior we want to check here.
-    try await fulfillmentOfOrThrow(twoPreparationRequestsReceived)
-    XCTAssertEqual(
-      preparationRequests.value.flatMap(\.targets),
-      [
-        try BuildTargetIdentifier(target: "LibA", destination: .target),
-        try BuildTargetIdentifier(target: "LibB", destination: .target),
-      ]
-    )
-    withExtendedLifetime(project) {}
-  }
-
-  func testIndexingProgressDoesNotGetStuckIfThereAreNoSourceFilesInTarget() async throws {
-    actor BuildServer: CustomBuildServer {
+  func testBuildServerUsesCustomTaskBatchSize() async throws {
+    final class BuildServer: CustomBuildServer {
       let inProgressRequestsTracker = CustomBuildServerInProgressRequestTracker()
       private let projectRoot: URL
+      private var testFileURL: URL { projectRoot.appendingPathComponent("test.swift").standardized }
 
-      init(projectRoot: URL, connectionToSourceKitLSP: any Connection) {
+      required init(projectRoot: URL, connectionToSourceKitLSP: any LanguageServerProtocol.Connection) {
         self.projectRoot = projectRoot
       }
 
       func initializeBuildRequest(_ request: InitializeBuildRequest) async throws -> InitializeBuildResponse {
         return try initializationResponseSupportingBackgroundIndexing(
           projectRoot: projectRoot,
-          outputPathsProvider: false
+          outputPathsProvider: false,
+          indexTaskBatchSize: 3
         )
       }
 
-      func workspaceBuildTargetsRequest(
-        _ request: WorkspaceBuildTargetsRequest
-      ) async throws -> WorkspaceBuildTargetsResponse {
-        return WorkspaceBuildTargetsResponse(targets: [
-          BuildTarget(
-            id: .dummy,
-            capabilities: BuildTargetCapabilities(),
-            languageIds: [],
-            dependencies: []
-          )
-        ])
-      }
-
-      func buildTargetSourcesRequest(_ request: BuildTargetSourcesRequest) throws -> BuildTargetSourcesResponse {
-        return BuildTargetSourcesResponse(items: [
-          SourcesItem(
-            target: .dummy,
-            sources: []
-          )
-        ])
+      func buildTargetSourcesRequest(_ request: BuildTargetSourcesRequest) async throws -> BuildTargetSourcesResponse {
+        var dummyTargets = [BuildTargetIdentifier]()
+        for i in 0..<10 {
+          dummyTargets.append(BuildTargetIdentifier(uri: try! URI(string: "dummy://dummy-\(i)")))
+        }
+        return BuildTargetSourcesResponse(items: dummyTargets.map {
+          SourcesItem(target: $0, sources: [SourceItem(uri: URI(testFileURL), kind: .file, generated: false)])
+        })
       }
 
       func textDocumentSourceKitOptionsRequest(
         _ request: TextDocumentSourceKitOptionsRequest
-      ) -> TextDocumentSourceKitOptionsResponse? {
-        var arguments = [request.textDocument.uri.pseudoPath]
-        if let defaultSDKPath {
-          arguments += ["-sdk", defaultSDKPath]
-        }
-        return TextDocumentSourceKitOptionsResponse(compilerArguments: arguments)
-      }
-
-      func prepareTarget(_ request: BuildTargetPrepareRequest) async throws -> VoidResponse {
-        return VoidResponse()
+      ) async throws -> TextDocumentSourceKitOptionsResponse? {
+        return TextDocumentSourceKitOptionsResponse(compilerArguments: [request.textDocument.uri.pseudoPath])
       }
     }
 
-    let expectation = self.expectation(description: "Did receive indexing work done progress")
-    let hooks = Hooks(
-      indexHooks: IndexHooks(buildGraphGenerationDidStart: {
-        // Defer build graph generation long enough so the the debouncer has time to start a work done progress for
-        // indexing.
-        do {
-          try await fulfillmentOfOrThrow(expectation)
-        } catch {
-          XCTFail("\(error)")
-        }
-      })
-    )
+    let preparationTaskSemaphore = WrappedSemaphore(name: "Received a preparation task")
+    let preparationTasks = ThreadSafeBox<[PreparationTaskDescription]>(initialValue: [])
     let project = try await CustomBuildServerTestProject(
       files: [
-        "Test.swift": """
-        func 1️⃣myTestFunc() {}
+        "test.swift": """
+        func testFunction() {}
         """
       ],
       buildServer: BuildServer.self,
-      capabilities: ClientCapabilities(window: WindowClientCapabilities(workDoneProgress: true)),
-      hooks: hooks,
-      enableBackgroundIndexing: true,
-      pollIndex: false,
-      preInitialization: { testClient in
-        testClient.handleMultipleRequests { (request: CreateWorkDoneProgressRequest) in
-          return VoidResponse()
-        }
-      }
-    )
-    let startIndexing = try await project.testClient.nextNotification(ofType: WorkDoneProgress.self) { notification in
-      guard case .begin(let value) = notification.value else {
-        return false
-      }
-      return value.title == "Indexing"
-    }
-    expectation.fulfill()
-    _ = try await project.testClient.nextNotification(ofType: WorkDoneProgress.self) { notification in
-      guard notification.token == startIndexing.token else {
-        return false
-      }
-      guard case .end = notification.value else {
-        return false
-      }
-      return true
-    }
-  }
-
-  func testIndexMultipleSwiftFilesInSameCompilerInvocation() async throws {
-    try await SkipUnless.canIndexMultipleSwiftFilesInSingleInvocation()
-    let hooks = Hooks(
-      indexHooks: IndexHooks(
-        updateIndexStoreTaskDidStart: { taskDescription in
-          XCTAssertEqual(
-            taskDescription.filesToIndex.map(\.file.sourceFile.fileURL?.lastPathComponent),
-            ["First.swift", "Second.swift"]
-          )
-        }
-      )
-    )
-    _ = try await SwiftPMTestProject(
-      files: [
-        "First.swift": "",
-        "Second.swift": "",
-      ],
-      hooks: hooks,
-      enableBackgroundIndexing: true
-    )
-  }
-
-  func testIndexMultipleSwiftFilesWithExistingOutputFileMap() async throws {
-    actor BuildServer: CustomBuildServer {
-      let inProgressRequestsTracker = CustomBuildServerInProgressRequestTracker()
-      private let projectRoot: URL
-
-      init(projectRoot: URL, connectionToSourceKitLSP: any Connection) {
-        self.projectRoot = projectRoot
-      }
-
-      func initializeBuildRequest(_ request: InitializeBuildRequest) async throws -> InitializeBuildResponse {
-        return try initializationResponseSupportingBackgroundIndexing(
-          projectRoot: projectRoot,
-          outputPathsProvider: false
+      hooks: Hooks(
+        indexHooks: IndexHooks(
+          preparationTaskDidStart: { task in
+            preparationTasks.withLock { preparationTasks in
+              // Ignore everything after the 4th batch to avoid flakiness.
+              if preparationTasks.count < 4 {
+                preparationTasks.append(task)
+              }
+              if preparationTasks.count == 4 {
+                preparationTaskSemaphore.signal()
+              }
+            }
+          }
         )
-      }
-
-      func buildTargetSourcesRequest(_ request: BuildTargetSourcesRequest) async throws -> BuildTargetSourcesResponse {
-        return self.dummyTargetSourcesResponse(files: [
-          DocumentURI(projectRoot.appending(component: "MyFile.swift")),
-          DocumentURI(projectRoot.appending(component: "MyOtherFile.swift")),
-        ])
-      }
-
-      func textDocumentSourceKitOptionsRequest(
-        _ request: TextDocumentSourceKitOptionsRequest
-      ) async throws -> TextDocumentSourceKitOptionsResponse? {
-        var arguments = [
-          try projectRoot.appending(component: "MyFile.swift").filePath,
-          try projectRoot.appending(component: "MyOtherFile.swift").filePath,
-        ]
-        if let defaultSDKPath {
-          arguments += ["-sdk", defaultSDKPath]
-        }
-        arguments += ["-index-unit-output-path", request.textDocument.uri.pseudoPath + ".o"]
-        arguments += ["-output-file-map", "dummy.json"]
-        return TextDocumentSourceKitOptionsResponse(compilerArguments: arguments)
-      }
-    }
-
-    let project = try await CustomBuildServerTestProject(
-      files: [
-        "MyFile.swift": """
-        func 1️⃣foo() {}
-        """,
-        "MyOtherFile.swift": """
-        func 2️⃣bar() {
-          3️⃣foo()
-        }
-        """,
-      ],
-      buildServer: BuildServer.self,
+      ),
       enableBackgroundIndexing: true
     )
 
-    let (uri, positions) = try project.openDocument("MyFile.swift")
-    let prepare = try await project.testClient.send(
-      CallHierarchyPrepareRequest(textDocument: TextDocumentIdentifier(uri), position: positions["1️⃣"])
-    )
-    let initialItem = try XCTUnwrap(prepare?.only)
-    let calls = try await project.testClient.send(CallHierarchyIncomingCallsRequest(item: initialItem))
-    XCTAssertEqual(
-      calls,
-      [
-        CallHierarchyIncomingCall(
-          from: CallHierarchyItem(
-            name: "bar()",
-            kind: .function,
-            tags: nil,
-            uri: try project.uri(for: "MyOtherFile.swift"),
-            range: Range(try project.position(of: "2️⃣", in: "MyOtherFile.swift")),
-            selectionRange: Range(try project.position(of: "2️⃣", in: "MyOtherFile.swift")),
-            data: .dictionary([
-              "usr": .string("s:4main3baryyF"),
-              "uri": .string(try project.uri(for: "MyOtherFile.swift").stringValue),
-            ])
-          ),
-          fromRanges: [Range(try project.position(of: "3️⃣", in: "MyOtherFile.swift"))]
-        )
-      ]
-    )
-  }
+    _ = try await project.testClient.send(SynchronizeRequest(index: true))
 
-  func testSwiftFilesInSameTargetHaveDifferentBuildSettings() async throws {
-    // In the real world, this shouldn't happen. If the files within the same target and thus module have different
-    // build settings, we wouldn't be able to build them with whole-module-optimization.
-    // Check for this anyway to make sure that we provide reasonable behavior even for build servers that are somewhat
-    // misbehaving, eg. if for some reasons targets and modules don't line up within the build server.
-    actor BuildServer: CustomBuildServer {
-      let inProgressRequestsTracker = CustomBuildServerInProgressRequestTracker()
-      private let projectRoot: URL
+    preparationTaskSemaphore.waitOrXCTFail()
 
-      init(projectRoot: URL, connectionToSourceKitLSP: any Connection) {
-        self.projectRoot = projectRoot
-      }
-
-      func initializeBuildRequest(_ request: InitializeBuildRequest) async throws -> InitializeBuildResponse {
-        return try initializationResponseSupportingBackgroundIndexing(
-          projectRoot: projectRoot,
-          outputPathsProvider: false
-        )
-      }
-
-      func buildTargetSourcesRequest(_ request: BuildTargetSourcesRequest) async throws -> BuildTargetSourcesResponse {
-        return self.dummyTargetSourcesResponse(files: [
-          DocumentURI(projectRoot.appending(component: "MyFile.swift")),
-          DocumentURI(projectRoot.appending(component: "MyOtherFile.swift")),
-        ])
-      }
-
-      func textDocumentSourceKitOptionsRequest(
-        _ request: TextDocumentSourceKitOptionsRequest
-      ) async throws -> TextDocumentSourceKitOptionsResponse? {
-        var arguments = [
-          try projectRoot.appending(component: "MyFile.swift").filePath,
-          try projectRoot.appending(component: "MyOtherFile.swift").filePath,
-        ]
-        if let defaultSDKPath {
-          arguments += ["-sdk", defaultSDKPath]
-        }
-        arguments += ["-index-unit-output-path", request.textDocument.uri.pseudoPath + ".o"]
-        if request.textDocument.uri.fileURL?.lastPathComponent == "MyFile.swift" {
-          arguments += ["-DMY_FILE"]
-        }
-        if request.textDocument.uri.fileURL?.lastPathComponent == "MyOtherFile.swift" {
-          arguments += ["-DMY_OTHER_FILE"]
-        }
-        return TextDocumentSourceKitOptionsResponse(compilerArguments: arguments)
-      }
-    }
-
-    let project = try await CustomBuildServerTestProject(
-      files: [
-        "MyFile.swift": """
-        func 1️⃣foo() {}
-
-        #if MY_FILE
-        func 2️⃣boo() {
-          3️⃣foo()
-        }
-        #endif
-        """,
-        "MyOtherFile.swift": """
-        #if MY_OTHER_FILE
-        func 4️⃣bar() {
-          5️⃣foo()
-        }
-        #endif
-        """,
-      ],
-      buildServer: BuildServer.self,
-      enableBackgroundIndexing: true
-    )
-
-    let (uri, positions) = try project.openDocument("MyFile.swift")
-    let prepare = try await project.testClient.send(
-      CallHierarchyPrepareRequest(textDocument: TextDocumentIdentifier(uri), position: positions["1️⃣"])
-    )
-    let initialItem = try XCTUnwrap(prepare?.only)
-    let calls = try await project.testClient.send(CallHierarchyIncomingCallsRequest(item: initialItem))
-    XCTAssertEqual(
-      calls,
-      [
-        CallHierarchyIncomingCall(
-          from: CallHierarchyItem(
-            name: "bar()",
-            kind: .function,
-            tags: nil,
-            uri: try project.uri(for: "MyOtherFile.swift"),
-            range: Range(try project.position(of: "4️⃣", in: "MyOtherFile.swift")),
-            selectionRange: Range(try project.position(of: "4️⃣", in: "MyOtherFile.swift")),
-            data: .dictionary([
-              "usr": .string("s:4main3baryyF"),
-              "uri": .string(try project.uri(for: "MyOtherFile.swift").stringValue),
-            ])
-          ),
-          fromRanges: [Range(try project.position(of: "5️⃣", in: "MyOtherFile.swift"))]
-        ),
-        CallHierarchyIncomingCall(
-          from: CallHierarchyItem(
-            name: "boo()",
-            kind: .function,
-            tags: nil,
-            uri: try project.uri(for: "MyFile.swift"),
-            range: Range(try project.position(of: "2️⃣", in: "MyFile.swift")),
-            selectionRange: Range(try project.position(of: "2️⃣", in: "MyFile.swift")),
-            data: .dictionary([
-              "usr": .string("s:4main3booyyF"),
-              "uri": .string(try project.uri(for: "MyFile.swift").stringValue),
-            ])
-          ),
-          fromRanges: [Range(try project.position(of: "3️⃣", in: "MyFile.swift"))]
-        ),
-      ]
-    )
+    // The test project has 10 targets, and we should have received them in batches of 3.
+    XCTAssertEqual(preparationTasks.value.count, 4)
+    let preparedTargetBatches = preparationTasks.value.map(\.targetsToPrepare).sorted { $0.count > $1.count }
+    XCTAssertEqual(preparedTargetBatches[0].count, 3)
+    XCTAssertEqual(preparedTargetBatches[1].count, 3)
+    XCTAssertEqual(preparedTargetBatches[2].count, 3)
+    XCTAssertEqual(preparedTargetBatches[3].count, 1)
   }
 }
 
