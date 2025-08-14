@@ -2618,6 +2618,7 @@ final class BackgroundIndexingTests: XCTestCase {
     let symbols = try await project.testClient.send(WorkspaceSymbolsRequest(query: "myTestFu"))
     XCTAssertEqual(symbols?.count, 1)
   }
+}
 
 extension HoverResponseContents {
   var markupContent: MarkupContent? {
