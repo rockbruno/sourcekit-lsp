@@ -950,15 +950,27 @@ package final actor SemanticIndexManager {
 
         // And after preparation is done, index the files in the targets.
         await withTaskGroup(of: Void.self) { taskGroup in
-          for target in targetsBatch {
-            for fileBatch in filesByTarget[target]!.partition(intoBatchesOfSize: indexTaskBatchSize) {
-              taskGroup.addTask {
-                await self.updateIndexStore(
-                  for: fileBatch,
-                  indexFilesWithUpToDateUnit: indexFilesWithUpToDateUnit,
-                  preparationTaskID: preparationTaskID,
-                  priority: priority
-                )
+          let fileInfos = targetsBatch.flatMap { (target) -> [FileIndexInfo] in
+            guard let files = filesByTarget[target] else {
+              logger.fault("Unexpectedly found no files for target in target batch")
+              return []
+            }
+            return files
+          }
+          let batches = await UpdateIndexStoreTaskDescription.batches(
+            toIndex: fileInfos,
+            buildServerManager: buildServerManager
+          )
+          for (target, language, fileBatch) in batches {
+            taskGroup.addTask {
+              let fileAndOutputPaths: [FileAndOutputPath] = fileBatch.compactMap {
+                guard $0.target == target else {
+                  logger.fault(
+                    "FileIndexInfo refers to different target than should be indexed: \($0.target.forLogging) vs \(target.forLogging)"
+                  )
+                  return nil
+                }
+                return FileAndOutputPath(file: $0.file, outputPath: $0.outputPath)
               }
               await self.updateIndexStore(
                 for: fileAndOutputPaths,
