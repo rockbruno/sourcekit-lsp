@@ -110,13 +110,15 @@ package struct PreparationTaskDescription: IndexTaskDescription {
         )
         signposter.endInterval("Preparing", state)
       }
+      var preparationFailed = false
       do {
         try await buildServerManager.prepare(targets: Set(targetsToPrepare))
       } catch {
         logger.error("Preparation failed: \(error.forLogging)")
+        preparationFailed = true
       }
       await hooks.preparationTaskDidFinish?(self)
-      if !Task.isCancelled {
+      if !Task.isCancelled && !preparationFailed {
         await preparationUpToDateTracker.markUpToDate(targetsToPrepare, updateOperationStartDate: startDate)
       }
     }
