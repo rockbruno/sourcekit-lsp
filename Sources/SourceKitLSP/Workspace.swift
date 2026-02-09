@@ -131,8 +131,9 @@ func createIndex(
           useExplicitOutputUnits: supportsOutputPaths,
           prefixMappings: prefixMappings
         )
-        logger.debug(
-          "Opened IndexStoreDB at \(indexDatabasePath) with store path \(indexStorePath) with explicit output files \(supportsOutputPaths)"
+        // CACHE DEBUG LOGGING - Log at error level to ensure visibility
+        logger.error(
+          "[CACHE-INIT] Opened IndexStoreDB - databasePath=\(indexDatabasePath) storePath=\(indexStorePath) explicitOutputPaths=\(supportsOutputPaths)"
         )
         return UncheckedIndex(indexStoreDB, usesExplicitOutputPaths: supportsOutputPaths)
       }

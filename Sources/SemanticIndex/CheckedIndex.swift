@@ -466,16 +466,25 @@ private struct IndexOutOfDateChecker {
   ///
   /// This means that at least a single build configuration of this file has been indexed since its last modification.
   mutating func indexHasUpToDateUnit(for filePath: DocumentURI, mainFile: DocumentURI?, index: IndexStoreDB) -> Bool {
-    return unitIsUpToDate(
+    let filePathStr = orLog("Realpath for up-to-date", { try (mainFile ?? filePath).fileURL?.realpath.filePath })
+    let unitDate = filePathStr.flatMap { index.dateOfLatestUnitFor(filePath: $0) }
+    let result = unitIsUpToDate(
       for: filePath,
-      unitModificationDate: {
-        let filePathStr = orLog("Realpath for up-to-date", { try (mainFile ?? filePath).fileURL?.realpath.filePath })
-        guard let filePathStr else {
-          return nil
-        }
-        return index.dateOfLatestUnitFor(filePath: filePathStr)
-      }
+      unitModificationDate: { unitDate }
     )
+
+    // CACHE DEBUG LOGGING
+    let sourceModDate = try? modificationDate(of: filePath)
+    let sourceModDateStr: String
+    switch sourceModDate {
+    case .none: sourceModDateStr = "error"
+    case .fileDoesNotExist: sourceModDateStr = "file-not-exist"
+    case .date(let d): sourceModDateStr = "\(d.timeIntervalSince1970)"
+    }
+    let unitDateStr = unitDate.map { "\($0.timeIntervalSince1970)" } ?? "nil"
+    logger.info("[CACHE-CHECK] indexHasUpToDateUnit(filePath) file=\(filePath.forLogging) unitDate=\(unitDateStr) sourceModDate=\(sourceModDateStr) result=\(result)")
+
+    return result
   }
 
   /// Return `true` if a unit file has been indexed for the given file path after its last modification date.
@@ -486,7 +495,21 @@ private struct IndexOutOfDateChecker {
   /// assumed to be a file that imports `url`. To check that `url` has an up-to-date unit, check that the latest unit
   /// for `mainFile` is newer than the mtime of the header file at `url`.
   mutating func indexHasUpToDateUnit(for filePath: DocumentURI, outputPath: String, index: IndexStoreDB) -> Bool {
-    return unitIsUpToDate(for: filePath, unitModificationDate: { index.dateOfUnitFor(outputPath: outputPath) })
+    let unitDate = index.dateOfUnitFor(outputPath: outputPath)
+    let result = unitIsUpToDate(for: filePath, unitModificationDate: { unitDate })
+
+    // CACHE DEBUG LOGGING
+    let sourceModDate = try? modificationDate(of: filePath)
+    let sourceModDateStr: String
+    switch sourceModDate {
+    case .none: sourceModDateStr = "error"
+    case .fileDoesNotExist: sourceModDateStr = "file-not-exist"
+    case .date(let d): sourceModDateStr = "\(d.timeIntervalSince1970)"
+    }
+    let unitDateStr = unitDate.map { "\($0.timeIntervalSince1970)" } ?? "nil"
+    logger.info("[CACHE-CHECK] indexHasUpToDateUnit(outputPath) file=\(filePath.forLogging) outputPath=\(outputPath) unitDate=\(unitDateStr) sourceModDate=\(sourceModDateStr) result=\(result)")
+
+    return result
   }
 
   // MARK: - Cached check primitives

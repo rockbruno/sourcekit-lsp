@@ -311,7 +311,10 @@ package final actor SemanticIndexManager {
         // Polling for unit changes is a costly operation since it iterates through all the unit files on the file
         // system but if existing unit files are not known to the index, we might re-index those files even if they are
         // up-to-date. This operation is worth the cost during initial indexing and during the manual re-index command.
+        // CACHE DEBUG LOGGING
+        logger.error("[CACHE-POLL] About to call pollForUnitChangesAndWait()")
         index.pollForUnitChangesAndWait()
+        logger.error("[CACHE-POLL] pollForUnitChangesAndWait() completed")
         await hooks.buildGraphGenerationDidFinish?()
         // TODO: Ideally this would be a type like any Collection<DocumentURI> & Sendable but that doesn't work due to
         // https://github.com/swiftlang/swift/issues/75602
@@ -319,6 +322,8 @@ package final actor SemanticIndexManager {
           await orLog("Getting files to index") {
             try await self.buildServerManager.buildableSourceFiles().sorted { $0.stringValue < $1.stringValue }
           } ?? []
+        // CACHE DEBUG LOGGING
+        logger.error("[CACHE-INDEX] Total buildable source files: \(filesToIndex.count), indexFilesWithUpToDateUnit: \(indexFilesWithUpToDateUnit)")
         await self.scheduleIndexing(
           of: filesToIndex,
           waitForBuildGraphGenerationTasks: false,
@@ -569,6 +574,8 @@ package final actor SemanticIndexManager {
         )
       )
     }
+    // CACHE DEBUG LOGGING
+    logger.error("[CACHE-FILES] filesToIndex: input=\(files.count) output=\(filesToReIndex.count) (filtered \(files.count - filesToReIndex.count) as up-to-date)")
     return filesToReIndex
   }
 
