@@ -424,6 +424,12 @@ package final class Workspace: Sendable, BuildServerManagerDelegate {
     return await uncheckedIndex?.checked(for: checkLevel)
   }
 
+  /// Explicitly close the underlying IndexStoreDB, releasing all internal
+  /// resources immediately.
+  package func closeIndex() async {
+    await uncheckedIndex?.close()
+  }
+
   package func filesDidChange(_ events: [FileEvent]) async {
     // First clear any cached realpaths in `sourceFilesWithSameRealpathInferrer`.
     await sourceFilesWithSameRealpathInferrer.filesDidChange(events)

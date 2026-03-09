@@ -340,6 +340,12 @@ package final actor UncheckedIndex: Sendable {
     self.unitOutputPaths = paths
   }
 
+  /// Explicitly close the underlying IndexStoreDB, releasing all internal
+  /// resources immediately.
+  package func close() {
+    underlyingIndexStoreDB.close()
+  }
+
   package nonisolated func checked(for checkLevel: IndexCheckLevel) -> CheckedIndex {
     return CheckedIndex(unchecked: self, checkLevel: checkLevel)
   }

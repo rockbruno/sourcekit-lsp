@@ -1267,6 +1267,9 @@ extension SourceKitLSPServer {
             await workspace.buildServerManager.shutdown()
           }
         }
+        taskGroup.addTask {
+          await workspace.closeIndex()
+        }
       }
     }
 
